@@ -2,7 +2,8 @@ import time
 import csv
 from datetime import datetime, date
 import argparse
-
+import os
+import platform
 # ----------------------------
 # File where we store session logs
 # ----------------------------
@@ -23,7 +24,23 @@ def log_session(session_type, duration):
         writer = csv.writer(f)
         writer.writerow([datetime.now().isoformat(), session_type, duration])
 
-
+# Function to play a simple beep sound when a session ends
+def beep():
+    """
+    Cross-platform beep notification:
+    - On Windows: uses the built-in 'winsound' module to play a tone.
+    - On Mac/Linux: sends the ASCII bell character (\a) to the terminal,
+      which triggers the default system beep (if enabled).
+    """
+    if platform.system() == "Windows":
+        # Windows-specific sound
+        import winsound
+        # Beep at 1000 Hz for 500 milliseconds
+        winsound.Beep(1000, 500)
+    else:
+        # On Mac/Linux, '\a' is the bell character.
+        # 'echo -n' prevents adding a newline after it.
+        os.system('echo -n "\a";')
 # ----------------------------
 # Function to run a timer
 # ----------------------------
@@ -44,6 +61,7 @@ def start_timer(minutes, session_type):
         time.sleep(1)  # wait 1 second before updating
 
     print(f"\n{session_type} session finished!")
+    beep()  # Play sound notification when session ends
 
     # Log session in CSV file after it's completed
     log_session(session_type, minutes)
