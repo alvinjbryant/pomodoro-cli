@@ -1,13 +1,29 @@
 import time
-import csv
+import sqlite3
 from datetime import datetime, date
 import argparse
 import os
 import platform
+
 # ----------------------------
-# File where we store session logs
+# Database setup
 # ----------------------------
-LOG_FILE = "sessions.csv"
+DB_FILE = "sessions.db"
+
+# Create a connection to the SQLite database
+conn = sqlite3.connect(DB_FILE)
+cursor = conn.cursor()
+
+# Create the sessions table if it doesn’t already exist
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,  -- Unique ID for each session
+    date TEXT NOT NULL,                    -- Date of the session (YYYY-MM-DD)
+    label TEXT NOT NULL,                   -- "Work" or "Break"
+    minutes INTEGER NOT NULL               -- Duration of the session in minutes
+)
+''')
+conn.commit()
 
 
 # ----------------------------
@@ -15,16 +31,22 @@ LOG_FILE = "sessions.csv"
 # ----------------------------
 def log_session(session_type, duration):
     """
-    Logs a completed session to the CSV file with:
-    - timestamp (when it finished)
+    Logs a completed session to the SQLite database with:
+    - date (YYYY-MM-DD)
     - session type (Work or Break)
     - duration in minutes
     """
-    with open(LOG_FILE, "a", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow([datetime.now().isoformat(), session_type, duration])
+    today = date.today().isoformat()
+    cursor.execute(
+        "INSERT INTO sessions (date, label, minutes) VALUES (?, ?, ?)",
+        (today, session_type, duration)
+    )
+    conn.commit()
 
+
+# ----------------------------
 # Function to play a simple beep sound when a session ends
+# ----------------------------
 def beep():
     """
     Cross-platform beep notification:
@@ -33,14 +55,12 @@ def beep():
       which triggers the default system beep (if enabled).
     """
     if platform.system() == "Windows":
-        # Windows-specific sound
         import winsound
-        # Beep at 1000 Hz for 500 milliseconds
-        winsound.Beep(1000, 500)
+        winsound.Beep(1000, 500)  # 1000 Hz for 500 ms
     else:
-        # On Mac/Linux, '\a' is the bell character.
-        # 'echo -n' prevents adding a newline after it.
         os.system('echo -n "\a";')
+
+
 # ----------------------------
 # Function to run a timer
 # ----------------------------
@@ -55,15 +75,14 @@ def start_timer(minutes, session_type):
 
     # Countdown loop (convert minutes to seconds)
     for remaining in range(minutes * 60, 0, -1):
-        mins, secs = divmod(remaining, 60)  # split total seconds into minutes:seconds
-        # Print time in MM:SS format, overwrite same line
+        mins, secs = divmod(remaining, 60)  # split into MM:SS
         print(f"\r{mins:02d}:{secs:02d}", end="")
-        time.sleep(1)  # wait 1 second before updating
+        time.sleep(1)
 
     print(f"\n{session_type} session finished!")
     beep()  # Play sound notification when session ends
 
-    # Log session in CSV file after it's completed
+    # Log session in the database
     log_session(session_type, minutes)
 
 
@@ -72,48 +91,37 @@ def start_timer(minutes, session_type):
 # ----------------------------
 def show_stats():
     """
-    Reads the CSV log file and sums up all 'Work' sessions
+    Reads the SQLite database and sums up all 'Work' sessions
     that happened today. Displays total minutes worked.
     """
-    try:
-        with open(LOG_FILE, "r") as f:
-            reader = csv.reader(f)
-            today = date.today().isoformat()
-            total = 0
+    today = date.today().isoformat()
+    cursor.execute(
+        "SELECT SUM(minutes) FROM sessions WHERE date = ? AND label = 'Work'",
+        (today,)
+    )
+    result = cursor.fetchone()[0]
 
-            for row in reader:
-                ts, session_type, duration = row
-                # Count only today's "Work" sessions
-                if ts.startswith(today) and session_type == "Work":
-                    total += int(duration)
-
-            print(f"Total work time today: {total} minutes")
-
-    except FileNotFoundError:
-        # Handle case where log file does not exist yet
-        print("No sessions logged yet.")
+    if result:
+        print(f"Total work time today: {result} minutes")
+    else:
+        print("No sessions logged yet today.")
 
 
 # ----------------------------
 # Main entry point
 # ----------------------------
 if __name__ == "__main__":
-    # argparse lets us handle commands from the terminal
     parser = argparse.ArgumentParser(description="Pomodoro CLI Tool")
 
-    # User chooses between starting a work session, break, or showing stats
     parser.add_argument(
         "command",
         choices=["work", "break", "stats"],
         help="Start work, break, or show stats"
     )
-
-    # Optional flag for custom minutes (e.g., --minutes 50)
     parser.add_argument("--minutes", type=int, default=None, help="Custom minutes")
 
     args = parser.parse_args()
 
-    # Match command to function
     if args.command == "work":
         start_timer(args.minutes or 25, "Work")  # default = 25 min
     elif args.command == "break":
