@@ -10,20 +10,27 @@ import platform
 # ----------------------------
 DB_FILE = "sessions.db"
 
-# Create a connection to the SQLite database
-conn = sqlite3.connect(DB_FILE)
-cursor = conn.cursor()
-
-# Create the sessions table if it doesn’t already exist
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS sessions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,  -- Unique ID for each session
-    date TEXT NOT NULL,                    -- Date of the session (YYYY-MM-DD)
-    label TEXT NOT NULL,                   -- "Work" or "Break"
-    minutes INTEGER NOT NULL               -- Duration of the session in minutes
-)
-''')
-conn.commit()
+def init_db():
+    """
+    Initialize the database and create the sessions table if it doesn't exist.
+    Columns:
+    - id: unique row identifier
+    - timestamp: ISO string when the session was completed
+    - session_type: "Work" or "Break"
+    - duration: session length in minutes
+    """
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            session_type TEXT NOT NULL,
+            duration INTEGER NOT NULL
+        )
+    """)
+    conn.commit()
+    conn.close()
 
 
 # ----------------------------
@@ -31,17 +38,16 @@ conn.commit()
 # ----------------------------
 def log_session(session_type, duration):
     """
-    Logs a completed session to the SQLite database with:
-    - date (YYYY-MM-DD)
-    - session type (Work or Break)
-    - duration in minutes
+    Logs a completed session into the SQLite database.
     """
-    today = date.today().isoformat()
-    cursor.execute(
-        "INSERT INTO sessions (date, label, minutes) VALUES (?, ?, ?)",
-        (today, session_type, duration)
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO sessions (timestamp, session_type, duration) VALUES (?, ?, ?)",
+        (datetime.now().isoformat(), session_type, duration),
     )
     conn.commit()
+    conn.close()
 
 
 # ----------------------------
@@ -49,14 +55,13 @@ def log_session(session_type, duration):
 # ----------------------------
 def beep():
     """
-    Cross-platform beep notification:
-    - On Windows: uses the built-in 'winsound' module to play a tone.
-    - On Mac/Linux: sends the ASCII bell character (\a) to the terminal,
-      which triggers the default system beep (if enabled).
+    Cross-platform beep notification.
+    - Windows: uses winsound.Beep
+    - Mac/Linux: uses ASCII bell character
     """
     if platform.system() == "Windows":
         import winsound
-        winsound.Beep(1000, 500)  # 1000 Hz for 500 ms
+        winsound.Beep(1000, 500)
     else:
         os.system('echo -n "\a";')
 
@@ -64,67 +69,87 @@ def beep():
 # ----------------------------
 # Function to run a timer
 # ----------------------------
-def start_timer(minutes, session_type):
+def start_timer(minutes, session_type, goal=None):
     """
-    Starts a countdown timer in the terminal.
-    Arguments:
-      minutes: how long the session lasts
-      session_type: "Work" or "Break"
+    Starts a countdown timer, logs the session, and checks progress.
     """
     print(f"Starting {session_type} session for {minutes} minutes...")
 
-    # Countdown loop (convert minutes to seconds)
     for remaining in range(minutes * 60, 0, -1):
-        mins, secs = divmod(remaining, 60)  # split into MM:SS
+        mins, secs = divmod(remaining, 60)
         print(f"\r{mins:02d}:{secs:02d}", end="")
         time.sleep(1)
 
     print(f"\n{session_type} session finished!")
-    beep()  # Play sound notification when session ends
+    beep()
 
-    # Log session in the database
     log_session(session_type, minutes)
+
+    # If it's a Work session, show goal progress
+    if session_type == "Work" and goal:
+        show_goal_progress(goal)
 
 
 # ----------------------------
-# Function to show today's stats
+# Function to show today's work stats
 # ----------------------------
 def show_stats():
     """
-    Reads the SQLite database and sums up all 'Work' sessions
-    that happened today. Displays total minutes worked.
+    Reads the database and sums up all 'Work' sessions for today.
     """
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
     today = date.today().isoformat()
-    cursor.execute(
-        "SELECT SUM(minutes) FROM sessions WHERE date = ? AND label = 'Work'",
-        (today,)
-    )
-    result = cursor.fetchone()[0]
 
-    if result:
-        print(f"Total work time today: {result} minutes")
-    else:
-        print("No sessions logged yet today.")
+    cur.execute(
+        "SELECT SUM(duration) FROM sessions WHERE session_type = 'Work' AND timestamp LIKE ?",
+        (today + "%",),
+    )
+    total = cur.fetchone()[0] or 0
+    conn.close()
+
+    print(f"Total work time today: {total} minutes")
+
+
+# ----------------------------
+# Function to show progress toward daily goal
+# ----------------------------
+def show_goal_progress(goal):
+    """
+    Shows how many work sessions have been completed today vs. the goal.
+    """
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    today = date.today().isoformat()
+
+    cur.execute(
+        "SELECT COUNT(*) FROM sessions WHERE session_type = 'Work' AND timestamp LIKE ?",
+        (today + "%",),
+    )
+    count = cur.fetchone()[0]
+    conn.close()
+
+    print(f"Progress: {count}/{goal} Pomodoros completed today")
+    if count >= goal:
+        print("🎉 Congratulations! You’ve reached your daily goal! 🎉")
 
 
 # ----------------------------
 # Main entry point
 # ----------------------------
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Pomodoro CLI Tool")
+    init_db()
 
-    parser.add_argument(
-        "command",
-        choices=["work", "break", "stats"],
-        help="Start work, break, or show stats"
-    )
+    parser = argparse.ArgumentParser(description="Pomodoro CLI Tool")
+    parser.add_argument("command", choices=["work", "break", "stats"], help="Start work, break, or show stats")
     parser.add_argument("--minutes", type=int, default=None, help="Custom minutes")
+    parser.add_argument("--goal", type=int, help="Set a daily Pomodoro goal (e.g., 4)")
 
     args = parser.parse_args()
 
     if args.command == "work":
-        start_timer(args.minutes or 25, "Work")  # default = 25 min
+        start_timer(args.minutes or 25, "Work", goal=args.goal)
     elif args.command == "break":
-        start_timer(args.minutes or 5, "Break")  # default = 5 min
+        start_timer(args.minutes or 5, "Break")
     elif args.command == "stats":
         show_stats()
