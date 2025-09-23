@@ -1,79 +1,67 @@
 import time
 import sqlite3
-from datetime import datetime, date
 import argparse
 import os
 import platform
+from datetime import datetime, date
+from user_manager import UserManager
+
+DB_NAME = "sessions.db"
+user_manager = UserManager()
 
 # ----------------------------
-# Database setup
+# Initialize database tables
 # ----------------------------
-DB_FILE = "sessions.db"
-
 def init_db():
     """
-    Initialize the database and create the sessions table if it doesn't exist.
-    Columns:
-    - id: unique row identifier
-    - timestamp: ISO string when the session was completed
-    - session_type: "Work" or "Break"
-    - duration: session length in minutes
+    Create sessions table if it doesn't exist.
+    Each session is linked to a user via user_id.
     """
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
     cur.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT NOT NULL,
-            session_type TEXT NOT NULL,
-            duration INTEGER NOT NULL
+            user_id INTEGER NOT NULL,
+            start_time TEXT NOT NULL,
+            end_time TEXT NOT NULL,
+            duration INTEGER NOT NULL,
+            type TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id)
         )
     """)
     conn.commit()
     conn.close()
 
-
 # ----------------------------
-# Function to log each session
+# Save a session
 # ----------------------------
-def log_session(session_type, duration):
-    """
-    Logs a completed session into the SQLite database.
-    """
-    conn = sqlite3.connect(DB_FILE)
+def save_session(user_id, start_time, end_time, duration, session_type):
+    conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO sessions (timestamp, session_type, duration) VALUES (?, ?, ?)",
-        (datetime.now().isoformat(), session_type, duration),
+        "INSERT INTO sessions (user_id, start_time, end_time, duration, type) VALUES (?, ?, ?, ?, ?)",
+        (user_id, start_time, end_time, duration, session_type),
     )
     conn.commit()
     conn.close()
 
-
 # ----------------------------
-# Function to play a simple beep sound when a session ends
+# Beep sound when session ends
 # ----------------------------
 def beep():
-    """
-    Cross-platform beep notification.
-    - Windows: uses winsound.Beep
-    - Mac/Linux: uses ASCII bell character
-    """
     if platform.system() == "Windows":
         import winsound
         winsound.Beep(1000, 500)
     else:
         os.system('echo -n "\a";')
 
-
 # ----------------------------
-# Function to run a timer
+# Start a timer
 # ----------------------------
-def start_timer(minutes, session_type, goal=None):
-    """
-    Starts a countdown timer, logs the session, and checks progress.
-    """
+def start_timer(user_id, minutes, session_type, goal=None):
     print(f"Starting {session_type} session for {minutes} minutes...")
+    start_time = datetime.now()
 
     for remaining in range(minutes * 60, 0, -1):
         mins, secs = divmod(remaining, 60)
@@ -83,73 +71,122 @@ def start_timer(minutes, session_type, goal=None):
     print(f"\n{session_type} session finished!")
     beep()
 
-    log_session(session_type, minutes)
+    end_time = datetime.now()
+    duration = (end_time - start_time).seconds // 60
+    save_session(user_id, start_time.isoformat(), end_time.isoformat(), duration, session_type)
 
-    # If it's a Work session, show goal progress
+    # Track goal progress if Work session
     if session_type == "Work" and goal:
-        show_goal_progress(goal)
-
+        show_goal_progress(user_id, goal)
 
 # ----------------------------
-# Function to show today's work stats
+# Show daily stats
 # ----------------------------
-def show_stats():
-    """
-    Reads the database and sums up all 'Work' sessions for today.
-    """
-    conn = sqlite3.connect(DB_FILE)
+def show_stats(user_id):
+    conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
     today = date.today().isoformat()
 
     cur.execute(
-        "SELECT SUM(duration) FROM sessions WHERE session_type = 'Work' AND timestamp LIKE ?",
-        (today + "%",),
+        "SELECT SUM(duration) FROM sessions WHERE user_id=? AND type='Work' AND start_time LIKE ?",
+        (user_id, today + "%"),
     )
     total = cur.fetchone()[0] or 0
     conn.close()
-
     print(f"Total work time today: {total} minutes")
 
-
 # ----------------------------
-# Function to show progress toward daily goal
+# Show goal progress
 # ----------------------------
-def show_goal_progress(goal):
-    """
-    Shows how many work sessions have been completed today vs. the goal.
-    """
-    conn = sqlite3.connect(DB_FILE)
+def show_goal_progress(user_id, goal):
+    conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
     today = date.today().isoformat()
 
     cur.execute(
-        "SELECT COUNT(*) FROM sessions WHERE session_type = 'Work' AND timestamp LIKE ?",
-        (today + "%",),
+        "SELECT COUNT(*) FROM sessions WHERE user_id=? AND type='Work' AND start_time LIKE ?",
+        (user_id, today + "%"),
     )
     count = cur.fetchone()[0]
     conn.close()
 
     print(f"Progress: {count}/{goal} Pomodoros completed today")
     if count >= goal:
-        print("🎉 Congratulations! You’ve reached your daily goal! 🎉")
-
+        print("Congratulations! You’ve reached your daily goal!")
 
 # ----------------------------
-# Main entry point
+# CLI Menu (interactive)
+# ----------------------------
+def interactive_menu():
+    while True:
+        print("\n=== Pomodoro CLI ===")
+        print("1. Sign up")
+        print("2. Log in")
+        print("3. Start a Pomodoro session")
+        print("4. View stats")
+        print("5. Log out")
+        print("6. Exit")
+
+        choice = input("Choose an option: ")
+
+        if choice == "1":
+            username = input("Enter new username: ")
+            password = input("Enter new password: ")
+            user_manager.signup(username, password)
+
+        elif choice == "2":
+            username = input("Enter username: ")
+            password = input("Enter password: ")
+            user_manager.login(username, password)
+
+        elif choice == "3":
+            if not user_manager.current_user:
+                print("You must log in first.")
+            else:
+                minutes = int(input("Work session length (default 25): ") or 25)
+                goal = input("Daily goal (press enter to skip): ")
+                start_timer(user_manager.current_user["id"], minutes, "Work", goal=int(goal) if goal else None)
+
+        elif choice == "4":
+            if not user_manager.current_user:
+                print("You must log in first.")
+            else:
+                show_stats(user_manager.current_user["id"])
+
+        elif choice == "5":
+            user_manager.logout()
+
+        elif choice == "6":
+            print("Exiting...")
+            break
+
+        else:
+            print("Invalid choice. Try again.")
+
+# ----------------------------
+# Main Entry Point
 # ----------------------------
 if __name__ == "__main__":
     init_db()
 
     parser = argparse.ArgumentParser(description="Pomodoro CLI Tool")
-    parser.add_argument("command", choices=["work", "break", "stats"], help="Start work, break, or show stats")
-    parser.add_argument("--minutes", type=int, default=None, help="Custom minutes")
-    parser.add_argument("--goal", type=int, help="Set a daily Pomodoro goal (e.g., 4)")
-
+    parser.add_argument("--cli", action="store_true", help="Run in interactive menu mode")
+    parser.add_argument("--work", type=int, help="Start a work session with custom minutes")
+    parser.add_argument("--break", type=int, help="Start a break with custom minutes")
+    parser.add_argument("--goal", type=int, help="Set a daily Pomodoro goal (used with --work)")
     args = parser.parse_args()
 
-    if args.command == "work":
-        start_timer(args.minutes or 25, "Work", goal=args.goal)
-    elif args.command == "break":
-        start_timer(args.minutes or 5, "Break")
-    elif args.command == "stats":
-        show_stats()
+    if args.cli:
+        interactive_menu()
+    elif args.work:
+        if not user_manager.current_user:
+            print("You must log in through the menu (--cli).")
+        else:
+            start_timer(user_manager.current_user["id"], args.work, "Work", goal=args.goal)
+    elif args.break:
+        if not user_manager.current_user:
+            print("You must log in through the menu (--cli).")
+        else:
+            start_timer(user_manager.current_user["id"], args.break, "Break")
+    else:
+        parser.print_help()
