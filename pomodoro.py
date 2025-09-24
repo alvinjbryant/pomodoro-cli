@@ -172,21 +172,35 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Pomodoro CLI Tool")
     parser.add_argument("--cli", action="store_true", help="Run in interactive menu mode")
     parser.add_argument("--work", type=int, help="Start a work session with custom minutes")
-    parser.add_argument("--break", type=int, help="Start a break with custom minutes")
+    parser.add_argument("--break", type=int, dest="break_minutes", help="Start a break with custom minutes")
     parser.add_argument("--goal", type=int, help="Set a daily Pomodoro goal (used with --work)")
+    parser.add_argument("--user", type=str, help="Username for login (required if not using --cli)")
+    parser.add_argument("--password", type=str, help="Password for login (required if not using --cli)")
     args = parser.parse_args()
 
     if args.cli:
+        # Interactive menu handles login/signup
         interactive_menu()
-    elif args.work:
+
+    elif args.work or args.break_minutes:
+        # Attempt login if not already logged in
         if not user_manager.current_user:
-            print("You must log in through the menu (--cli).")
-        else:
+            if args.user and args.password:
+                logged_in = user_manager.login(args.user, args.password)
+                if not logged_in:
+                    print("Login failed. Exiting.")
+                    exit(1)
+            else:
+                print("You must provide --user and --password, or use --cli for interactive login.")
+                exit(1)
+
+        # Start work session if specified
+        if args.work:
             start_timer(user_manager.current_user["id"], args.work, "Work", goal=args.goal)
-    elif args.break:
-        if not user_manager.current_user:
-            print("You must log in through the menu (--cli).")
-        else:
-            start_timer(user_manager.current_user["id"], args.break, "Break")
+
+        # Start break session if specified
+        if args.break_minutes:
+            start_timer(user_manager.current_user["id"], args.break_minutes, "Break")
+
     else:
         parser.print_help()
